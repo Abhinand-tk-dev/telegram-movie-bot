@@ -97,7 +97,7 @@ async function sendMovies(chatId, genre, page) {
     comedy: 35,
     drama: 18,
     horror: 27,
-    'sci-fi': 878,
+    scifi: 878,
     romance: 10749,
   };
 
