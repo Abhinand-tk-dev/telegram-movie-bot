@@ -166,17 +166,29 @@ bot.onText(/\/trailer (.+)/, async (msg, match) => {
 // /start command
 bot.onText(/\/start/, (msg) => {
   const welcome = `
-🎬 *Welcome to MovieBot!*
+👋 *Hi ${msg.from.first_name || "there"}!*
 
-Available commands:
-/trailer <movie> – Get trailer with info
-/recommend <genre> – Get top movies with next/prev
+Welcome to *🎬 MovieBot* — your personal movie assistant.
 
-Example:
-/trailer Inception
-/recommend scifi
+Here's what I can do for you:
 
-Made by Abhinand Tk 💡(a unknown guy)
-`;
-  bot.sendMessage(msg.chat.id, welcome, { parse_mode: "Markdown" });
+🎞️ */trailer <movie name>*  
+_Get the official trailer, rating, overview & poster._
+
+🍿 */recommend <genre>*  
+_Discover top-rated movies in your favorite genre._
+
+💡 *Available genres:*  
+_action, comedy, drama, horror, romance, scifi_
+
+📌 *Examples:*
+\`/trailer Dune Part Two\`  
+\`/recommend scifi\`
+
+🎬 *Made with ❤️ by Abhinand Tk — your movie buddy (and an unknown guy)*
+  `.trim();
+
+  bot.sendMessage(msg.chat.id, welcome, {
+    parse_mode: "Markdown",
+  });
 });
