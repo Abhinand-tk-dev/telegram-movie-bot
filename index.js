@@ -1,110 +1,33 @@
-require('dotenv').config();
-const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
-
-// Logs
-console.log("✅ Bot is starting...");
-console.log("Loaded ENV:");
-console.log("TELEGRAM_TOKEN:", process.env.TELEGRAM_TOKEN ? "✅ Loaded" : "❌ Missing");
-console.log("TMDB_API_KEY:", process.env.TMDB_API_KEY ? "✅ Loaded" : "❌ Missing");
-
-if (!process.env.TELEGRAM_TOKEN || !process.env.TMDB_API_KEY) {
-  console.error("❌ Missing TELEGRAM_TOKEN or TMDB_API_KEY in .env");
-  process.exit(1);
-}
-
-const TMDB_API_KEY = process.env.TMDB_API_KEY;
-const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+require("dotenv").config();
+const TelegramBot = require("node-telegram-bot-api");
+const axios = require("axios");
 
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+const TMDB_API_KEY = process.env.TMDB_API_KEY;
+const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 
-console.log("🤖 Bot connected to Telegram successfully.");
+const genreMap = {
+  action: 28,
+  comedy: 35,
+  drama: 18,
+  horror: 27,
+  scifi: 878,
+  romance: 10749,
+};
 
-// Handle any message for logging
-bot.on("message", (msg) => {
-  console.log("📩 Received message from Telegram:", msg.text);
-});
+// Store genre movie pages per user
+const userGenreState = {};
 
-// /start
-bot.onText(/\/start/, (msg) => {
-  console.log("⚡ /start command received");
-  bot.sendMessage(msg.chat.id, `🎬 *Welcome to MovieBot!*
+console.log("🤖 Bot is running...");
 
-Available commands:
-/trailer <movie name> – Get a movie trailer
-/recommend <genre> – Get top movies by genre (with Next button)
-
-Try:
-/trailer Inception
-/recommend action`, { parse_mode: "Markdown" });
-});
-
-// /trailer
-bot.onText(/\/trailer (.+)/, async (msg, match) => {
+// /recommend command
+bot.onText(/\/recommend (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const query = match[1];
-  console.log(`🎥 /trailer command for: ${query}`);
+  const rawGenre = match[1].toLowerCase().replace(/[-\s]/g, "");
+  const genreId = genreMap[rawGenre];
 
-  try {
-    const res = await axios.get(`${TMDB_BASE_URL}/search/movie`, {
-      params: { api_key: TMDB_API_KEY, query },
-    });
-
-    console.log("🔎 TMDb search result:", res.data.results);
-
-    const movie = res.data.results[0];
-    if (!movie) {
-      bot.sendMessage(chatId, "❌ Movie not found.");
-      return;
-    }
-
-    const videoRes = await axios.get(`${TMDB_BASE_URL}/movie/${movie.id}/videos`, {
-      params: { api_key: TMDB_API_KEY },
-    });
-
-    console.log("📺 Video results:", videoRes.data.results);
-
-    const trailer = videoRes.data.results.find(
-      (v) => v.type === "Trailer" && v.site === "YouTube"
-    );
-
-    if (trailer) {
-      const url = `https://www.youtube.com/watch?v=${trailer.key}`;
-      bot.sendMessage(chatId, `🎬 *${movie.title}* Trailer:\n${url}`, {
-        parse_mode: "Markdown",
-      });
-    } else {
-      bot.sendMessage(chatId, "❌ Trailer not found.");
-    }
-  } catch (err) {
-    console.error("🚨 Error in /trailer command:", err.message);
-    bot.sendMessage(chatId, "⚠️ Error fetching trailer.");
-  }
-});
-
-// /recommend <genre>
-bot.onText(/\/recommend (\w+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const genre = match[1].toLowerCase();
-  const page = 1;
-  sendMovies(chatId, genre, page);
-});
-
-// Send movie list with pagination
-async function sendMovies(chatId, genre, page) {
-  const genreMap = {
-    action: 28,
-    comedy: 35,
-    drama: 18,
-    horror: 27,
-    scifi: 878,
-    romance: 10749,
-  };
-
-  const genreId = genreMap[genre];
   if (!genreId) {
-    bot.sendMessage(chatId, "❌ Unknown genre. Try: action, comedy, drama, horror, sci-fi, romance");
-    return;
+    return bot.sendMessage(chatId, "❌ Unknown genre. Try: action, comedy, drama, horror, scifi, romance");
   }
 
   try {
@@ -113,44 +36,147 @@ async function sendMovies(chatId, genre, page) {
         api_key: TMDB_API_KEY,
         with_genres: genreId,
         sort_by: "popularity.desc",
-        page,
       },
     });
 
-    const movies = res.data.results.slice(0, 5).map(
-      (m) => `🎬 ${m.title} (${m.release_date?.split("-")[0]})`
-    );
-
-    const text = `🔥 *Top ${genre} Movies - Page ${page}:*\n\n${movies.join("\n")}`;
-
-    bot.sendMessage(chatId, text, {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: "➡️ Next",
-              callback_data: `next_${genre}_${page + 1}`,
-            },
-          ],
-        ],
-      },
-    });
+    const movies = res.data.results;
+    userGenreState[chatId] = { genreId, page: 0, movies };
+    sendMovieBatch(chatId, movies, 0);
   } catch (err) {
-    console.error("🚨 Error in sendMovies:", err.message);
+    console.error("❌ Recommend error:", err.message);
     bot.sendMessage(chatId, "⚠️ Error fetching recommendations.");
   }
-}
+});
 
-// Handle inline keyboard button clicks
-bot.on("callback_query", (callbackQuery) => {
-  const msg = callbackQuery.message;
-  const data = callbackQuery.data;
+// Handle inline button (next/prev)
+bot.on("callback_query", (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+  const state = userGenreState[chatId];
+  if (!state) return;
 
-  if (data.startsWith("next_")) {
-    const [_, genre, page] = data.split("_");
-    sendMovies(msg.chat.id, genre, parseInt(page));
+  if (data === "next") {
+    state.page++;
+    sendMovieBatch(chatId, state.movies, state.page);
+  } else if (data === "prev" && state.page > 0) {
+    state.page--;
+    sendMovieBatch(chatId, state.movies, state.page);
   }
 
-  bot.answerCallbackQuery(callbackQuery.id); // remove spinner
+  bot.answerCallbackQuery(query.id);
+});
+
+// Send batch of movies (5 per page)
+function sendMovieBatch(chatId, movies, page) {
+  const start = page * 5;
+  const end = start + 5;
+  const batch = movies.slice(start, end);
+
+  if (batch.length === 0) {
+    bot.sendMessage(chatId, "❌ No more results.");
+    return;
+  }
+
+  batch.forEach((movie) => {
+    const poster = movie.poster_path
+      ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+      : null;
+
+    const caption = `
+🎬 *${movie.title}* (${movie.release_date?.split("-")[0]})
+⭐ *Rating:* ${movie.vote_average}/10
+📝 ${movie.overview?.substring(0, 300)}...
+    `.trim();
+
+    if (poster) {
+      bot.sendPhoto(chatId, poster, {
+        caption,
+        parse_mode: "Markdown",
+      });
+    } else {
+      bot.sendMessage(chatId, caption, { parse_mode: "Markdown" });
+    }
+  });
+
+  const inlineKeyboard = {
+    inline_keyboard: [
+      [
+        { text: "⏮️ Prev", callback_data: "prev" },
+        { text: "⏭️ Next", callback_data: "next" },
+      ],
+    ],
+  };
+
+  bot.sendMessage(chatId, `Page ${page + 1}`, {
+    reply_markup: inlineKeyboard,
+  });
+}
+
+// /trailer command
+bot.onText(/\/trailer (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const query = match[1];
+
+  try {
+    const res = await axios.get(`${TMDB_BASE_URL}/search/movie`, {
+      params: { api_key: TMDB_API_KEY, query },
+    });
+
+    const movie = res.data.results[0];
+    if (!movie) return bot.sendMessage(chatId, "❌ Movie not found.");
+
+    const videoRes = await axios.get(`${TMDB_BASE_URL}/movie/${movie.id}/videos`, {
+      params: { api_key: TMDB_API_KEY },
+    });
+
+    const trailer = videoRes.data.results.find(
+      (v) => (v.type === "Trailer" || v.type === "Teaser") && v.site === "YouTube"
+    );
+
+    const trailerLink = trailer
+      ? `https://www.youtube.com/watch?v=${trailer.key}`
+      : "❌ Trailer not found.";
+
+    const poster = movie.poster_path
+      ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+      : null;
+
+    const caption = `
+🎬 *${movie.title}* (${movie.release_date?.split("-")[0]})
+⭐ *Rating:* ${movie.vote_average}/10
+📝 ${movie.overview?.substring(0, 400)}...
+
+🔗 [Watch Trailer](${trailerLink})
+    `.trim();
+
+    if (poster) {
+      bot.sendPhoto(chatId, poster, {
+        caption,
+        parse_mode: "Markdown",
+      });
+    } else {
+      bot.sendMessage(chatId, caption, { parse_mode: "Markdown" });
+    }
+  } catch (err) {
+    console.error("❌ Trailer error:", err.message);
+    bot.sendMessage(chatId, "⚠️ Error fetching trailer.");
+  }
+});
+
+// /start command
+bot.onText(/\/start/, (msg) => {
+  const welcome = `
+🎬 *Welcome to MovieBot!*
+
+Available commands:
+/trailer <movie> – Get trailer with info
+/recommend <genre> – Get top movies with next/prev
+
+Example:
+/trailer Inception
+/recommend scifi
+
+Made by Abhinand Tk 💡(a unknown guy)
+`;
+  bot.sendMessage(msg.chat.id, welcome, { parse_mode: "Markdown" });
 });
