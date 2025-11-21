@@ -1,4 +1,6 @@
 require("dotenv").config();
+require("./server"); // 👈 Start Express server
+
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
 
@@ -185,7 +187,7 @@ _action, comedy, drama, horror, romance, scifi_
 \`/trailer Dune Part Two\`  
 \`/recommend scifi\`
 
-🎬 *Made with ❤️ by Abhinand Tk — your movie buddy (and an unknown guy)*
+🎬 *Made with ❤️ by Abhinand Tk — your movie buddy*
   `.trim();
 
   bot.sendMessage(msg.chat.id, welcome, {
